@@ -13,6 +13,7 @@ readme = "../README.md"
 
 [features]
 with-serde = ["serde", "serde-big-array"]
+progress-bar = ["indicatif"]
 
 [dependencies]
 indicatif = { version = "0.17", optional = true }
