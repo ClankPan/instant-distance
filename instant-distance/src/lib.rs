@@ -18,6 +18,12 @@ mod types;
 pub use types::PointId;
 use types::{Candidate, Layer, LayerId, UpperNode, Visited, ZeroNode, INVALID};
 
+async fn commit() {
+    let instr_count = ic_cdk::api::performance_counter(0);
+    ic_cdk::println!("counter: {}", instr_count);
+    let _call_result: Result<(), _> = ic_cdk::call(ic_cdk::id(), "nothing", ()).await;
+}
+
 #[derive(Clone)]
 /// Parameters for building the `Hnsw`
 pub struct Builder {
@@ -75,13 +81,14 @@ impl Builder {
     }
 
     /// Build an `HnswMap` with the given sets of points and values
-    pub fn build<P: Point, V: Clone>(self, points: Vec<P>, values: Vec<V>) -> HnswMap<P, V> {
-        HnswMap::new(points, values, self)
+    pub async fn build<P: Point, V: Clone>(self, points: Vec<P>, values: Vec<V>) -> HnswMap<P, V> {
+        ic_cdk::println!("instructon count: {}", ic_cdk::api::performance_counter(0));
+        HnswMap::new(points, values, self).await
     }
 
     /// Build the `Hnsw` with the given set of points
-    pub fn build_hnsw<P: Point>(self, points: Vec<P>) -> (Hnsw<P>, Vec<PointId>) {
-        Hnsw::new(points, self)
+    pub async fn build_hnsw<P: Point>(self, points: Vec<P>) -> (Hnsw<P>, Vec<PointId>) {
+        Hnsw::new(points, self).await
     }
 
     #[doc(hidden)]
@@ -138,8 +145,9 @@ where
     P: Point,
     V: Clone,
 {
-    fn new(points: Vec<P>, values: Vec<V>, builder: Builder) -> Self {
-        let (hnsw, ids) = Hnsw::new(points, builder);
+    async fn new(points: Vec<P>, values: Vec<V>, builder: Builder) -> Self {
+        let (hnsw, ids) = Hnsw::new(points, builder).await;
+        ic_cdk::println!("Hnsw::new(points, builder);: {}", ic_cdk::api::performance_counter(0));
 
         let mut sorted = ids.into_iter().enumerate().collect::<Vec<_>>();
         sorted.sort_unstable_by(|a, b| a.1.cmp(&b.1));
@@ -203,15 +211,17 @@ where
     P: Point,
 {
     pub fn builder() -> Builder {
+        ic_cdk::println!("instructon count: {}", ic_cdk::api::performance_counter(0));
         Builder::default()
     }
 
-    fn new(points: Vec<P>, builder: Builder) -> (Self, Vec<PointId>) {
+    async fn new(points: Vec<P>, builder: Builder) -> (Self, Vec<PointId>) {
         let ef_search = builder.ef_search;
         let ef_construction = builder.ef_construction;
         let ml = builder.ml;
         let heuristic = builder.heuristic;
         let mut rng = SmallRng::seed_from_u64(builder.seed);
+        ic_cdk::println!("init variables: {}", ic_cdk::api::performance_counter(0));
 
         #[cfg(feature = "indicatif")]
         let progress = builder.progress;
@@ -244,6 +254,7 @@ where
             }
             sizes.push((num - next, num));
             num = next;
+            ic_cdk::println!("figure out layer size loop: {}", ic_cdk::api::performance_counter(0));
         }
         sizes.push((num, num));
         sizes.reverse();
@@ -269,6 +280,8 @@ where
             })
             .collect::<Vec<_>>();
 
+        ic_cdk::println!("give points a random layer: {}", ic_cdk::api::performance_counter(0));
+
         // Figure out how many nodes will go on each layer. This helps us allocate memory capacity
         // for each layer in advance, and also helps enable batch insertion of points.
 
@@ -279,6 +292,8 @@ where
             // Skip the first point, since we insert the enter point separately
             ranges.push((LayerId(num_layers - i - 1), max(start, 1)..cumulative));
         }
+
+        ic_cdk::println!("figure out how many nodes for each layers: {}", ic_cdk::api::performance_counter(0));
 
         // Initialize data for layers
 
@@ -301,6 +316,8 @@ where
             done: AtomicUsize::new(0),
         };
 
+        ic_cdk::println!("make Construction struct: {}", ic_cdk::api::performance_counter(0));
+
         for (layer, range) in ranges {
             #[cfg(feature = "indicatif")]
             if let Some(bar) = &state.progress {
@@ -311,11 +328,19 @@ where
 
             let end = range.end;
             if layer == top {
-                range.into_iter().for_each(|i| inserter(PointId(i as u32)))
+                // range.into_iter().for_each(|i| inserter(PointId(i as u32)))
+                for i in range.into_iter() {
+                    commit().await;
+                    inserter(PointId(i as u32))
+                }
             } else {
-                range
-                    .into_par_iter()
-                    .for_each(|i| inserter(PointId(i as u32)));
+                // range
+                //     .into_par_iter()
+                //     .for_each(|i| inserter(PointId(i as u32)));
+                for i in range.into_iter() {
+                    commit().await;
+                    inserter(PointId(i as u32))
+                }
             }
 
             // For layers above the zero layer, make a copy of the current state of the zero layer
@@ -326,6 +351,8 @@ where
                     .map(|zero| UpperNode::from_zero(&zero.read()))
                     .collect_into_vec(&mut layers[layer.0 - 1]);
             }
+
+            ic_cdk::println!("insertion in layer : {}", ic_cdk::api::performance_counter(0));
         }
 
         #[cfg(feature = "indicatif")]
